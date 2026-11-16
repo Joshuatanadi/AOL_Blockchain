@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MediChain — Clinical EHR Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- toast -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- login -->
+  <div id="login" class="login-wrapper">
+    <div class="login-card">
+      <div class="brand-mark">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 6v12M6 12h12"/>
+        </svg>
+      </div>
+      <span class="portal-tag">DECENTRALIZED EHR SYSTEM</span>
+      <h1>MediChain Clinical Portal</h1>
+      <p class="subtitle">Secure, tamper-proof hospital medical records powered by Ethereum blockchain.</p>
+      
+      <button id="btnConnect" class="btn btn-primary full">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="5" width="20" height="14" rx="2"/>
+          <line x1="2" y1="10" x2="22" y2="10"/>
+        </svg>
+        Connect MetaMask Wallet
+      </button>
+
+      <div class="login-footer">
+        <span class="dot-live"></span> Role-based access verified on-chain
+      </div>
+      <p id="loginError" class="error"></p>
+    </div>
+  </div>
+
+  <!-- app -->
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="wrap topbar-inner">
+        <div class="brand-group">
+          <div class="brand-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 6v12M6 12h12"/>
+            </svg>
+          </div>
+          <div>
+            <span class="brand-name">MediChain</span>
+            <span class="brand-sub">Hospital EHR</span>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <span id="roleBadge" class="role-pill"></span>
+          <div class="wallet-chip">
+            <span class="dot-live"></span>
+            <span id="shortWallet" class="mono"></span>
+          </div>
+          <button id="btnLogout" class="btn-outline">Sign Out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap main-content">
+      <!-- profile -->
+      <section class="card profile-card">
+        <div class="section-header">
+          <div>
+            <span class="eyebrow">IDENTIFICATION</span>
+            <h2>Practitioner &amp; Patient Profile</h2>
+          </div>
+        </div>
+        <div id="profileBox"></div>
+      </section>
+
+      <!-- admin -->
+      <div id="viewAdmin" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">ACCESS CONTROL</span>
+              <h2>Register Medical Staff / Patient</h2>
+            </div>
+          </div>
+
+          <form id="formUser" class="form-grid">
+            <div class="field-group span-2">
+              <label for="inputWalletAddress">Ethereum Wallet Address</label>
+              <input id="inputWalletAddress" placeholder="0x0000...0000" required />
+            </div>
+
+            <div class="field-group">
+              <label for="inputRole">System Role</label>
+              <select id="inputRole">
+                <option value="2">Doctor (Clinical Practitioner)</option>
+                <option value="3">Patient (Read-Only Access)</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label for="inputFullName">Full Name</label>
+              <input id="inputFullName" placeholder="e.g. Dr. Sarah Jenkins" required />
+            </div>
+
+            <div class="field-group">
+              <label for="inputPhoneNumber">Contact Number</label>
+              <input id="inputPhoneNumber" placeholder="e.g. +62 812-3456-7890" />
+            </div>
+
+            <div class="field-group">
+              <label for="inputSpecialization" id="labelExtra">Medical Specialization</label>
+              <input id="inputSpecialization" placeholder="e.g. Cardiology, General Practice" />
+              <input id="inputAge" type="number" min="0" max="150" placeholder="Patient Age (years)" class="hidden" />
+            </div>
+
+            <div class="form-actions span-2">
+              <button class="btn btn-primary">Register Wallet &amp; Profile</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">DIRECTORY</span>
+              <h2>Registered Hospital Directory</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Full Name</th>
+                  <th>Role</th>
+                  <th>Wallet Address</th>
+                  <th>Contact</th>
+                  <th>Department / Age</th>
+                  <th class="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="userTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- doctor -->
+      <div id="viewDoctor" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">PATIENT ADMISSION</span>
+              <h2>Register New Patient</h2>
+            </div>
+          </div>
+
+          <form id="formDoctorPatient" class="form-grid">
+            <div class="field-group span-2">
+              <label for="docPatientWallet">Patient Ethereum Wallet Address</label>
+              <input id="docPatientWallet" placeholder="0x0000...0000" required />
+            </div>
+
+            <div class="field-group">
+              <label for="docPatientName">Patient Full Name</label>
+              <input id="docPatientName" placeholder="e.g. Budi Santoso" required />
+            </div>
+
+            <div class="field-group">
+              <label for="docPatientPhone">Contact Number</label>
+              <input id="docPatientPhone" placeholder="e.g. +62 812-3456-7890" />
+            </div>
+
+            <div class="field-group span-2">
+              <label for="docPatientAge">Patient Age (Years)</label>
+              <input id="docPatientAge" type="number" min="0" max="150" placeholder="e.g. 28" />
+            </div>
+
+            <div class="form-actions span-2">
+              <button class="btn btn-primary">Register Patient</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">CLINICAL ENTRY</span>
+              <h2 id="recordFormTitle">Create New Medical Record</h2>
+            </div>
+          </div>
+
+          <form id="formRecord" class="form-stack">
+            <div class="field-group">
+              <label for="selectPatient">Select Registered Patient</label>
+              <select id="selectPatient" required></select>
+            </div>
+
+            <div class="field-group">
+              <label for="inputDiagnosis">Clinical Diagnosis &amp; Findings</label>
+              <textarea id="inputDiagnosis" rows="3" placeholder="Enter primary diagnosis, symptoms, and vital observations..." required></textarea>
+            </div>
+
+            <div class="field-group">
+              <label for="inputTreatment">Treatment Plan &amp; Prescription</label>
+              <textarea id="inputTreatment" rows="3" placeholder="Enter prescribed medications, dosage instructions, and follow-up care..." required></textarea>
+            </div>
+
+            <div class="form-actions">
+              <button id="btnSaveRecord" class="btn btn-primary">Save to Blockchain</button>
+              <button id="btnCancelEdit" type="button" class="btn-outline hidden">Cancel Edit</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">EHR ARCHIVE</span>
+              <h2>Issued Medical Records</h2>
+            </div>
+          </div>
+          <div id="doctorRecords" class="records-list"></div>
+        </section>
+      </div>
+
+      <!-- patient -->
+      <div id="viewPatient" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">PERSONAL HEALTH RECORD</span>
+              <h2>My Medical History</h2>
+            </div>
+          </div>
+          <p id="patientMessage" class="error"></p>
+          <div id="patientRecords" class="records-list"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
