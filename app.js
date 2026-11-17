@@ -1,5 +1,16 @@
 // config
-const SMART_CONTRACT_ADDRESS = "0x55cD697976056728bef4666E5D88E38cC67dEBC4";
+// These two lines are rewritten by `npm run deploy` (scripts/deploy.ts)
+const SMART_CONTRACT_ADDRESS = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
+const EXPECTED_CHAIN_ID = 31337;
+
+// Network MetaMask is asked to add when it does not know the local Hardhat node yet
+const LOCAL_HARDHAT_NETWORK = {
+  chainId: "0x7a69", // 31337
+  chainName: "Hardhat Localhost",
+  rpcUrls: ["http://127.0.0.1:8545"],
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+};
+
 const ADMIN_KEY = "a3f9c1e07b2d4856f0e1a9c3d5b7e2f4";
 
 const MEDICAL_RECORD_STRUCT =
@@ -76,6 +87,19 @@ const getExtraInfo = (user) =>
     ? user.specialization || "-"
     : user.age !== null && user.age !== undefined ? user.age + " years" : "-";
 
+// Stops a registration before any transaction is sent when the wallet already
+// has a role, so an existing profile is never overwritten by a second sign-up.
+async function assertWalletNotRegistered(walletAddress) {
+  if (!ethers.isAddress(walletAddress)) throw new Error("That is not a valid wallet address.");
+  const existingRole = Number(await smartContract.getRole(walletAddress));
+  if (existingRole !== 0) {
+    throw new Error(
+      `This wallet is already registered as ${ROLE_NAMES[existingRole]}. ` +
+      "Existing users can only be changed with Edit, or removed by the Admin first."
+    );
+  }
+}
+
 // state
 let smartContract;
 let activeWallet;
@@ -84,20 +108,66 @@ let userList = [];
 let doctorRecordList = [];
 let editingRecordId = null;
 
+// network
+// Makes sure MetaMask is on the chain the contract was deployed to.
+async function ensureCorrectNetwork() {
+  const currentChainId = Number(await window.ethereum.request({ method: "eth_chainId" }));
+  if (currentChainId === EXPECTED_CHAIN_ID) return;
+
+  const expectedChainIdHex = "0x" + EXPECTED_CHAIN_ID.toString(16);
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: expectedChainIdHex }],
+    });
+  } catch (error) {
+    // 4902 = MetaMask does not know this chain yet
+    const canAddNetwork = error.code === 4902 && expectedChainIdHex === LOCAL_HARDHAT_NETWORK.chainId;
+    if (!canAddNetwork) {
+      throw new Error(`Wrong network (chain ID ${currentChainId}). Please switch MetaMask to chain ID ${EXPECTED_CHAIN_ID}.`);
+    }
+    await window.ethereum.request({
+      method: "wallet_addEthereumChain",
+      params: [LOCAL_HARDHAT_NETWORK],
+    });
+  }
+}
+
 // login
 getElement("btnConnect").onclick = async () => {
   getElement("loginError").textContent = "";
   try {
     if (!window.ethereum) throw new Error("MetaMask not found. Please install it first.");
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    await provider.send("eth_requestAccounts", []);
-    const signer = await provider.getSigner();
-    activeWallet = (await signer.getAddress()).toLowerCase();
-    smartContract = new ethers.Contract(SMART_CONTRACT_ADDRESS, SMART_CONTRACT_ABI, signer);
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+    await ensureCorrectNetwork();
 
-    activeRole = Number(await smartContract.getRole(activeWallet));
-    if (activeRole === 0) throw new Error("Wallet is not registered. Please contact the Admin.");
-    
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const connectedWallet = (await signer.getAddress()).toLowerCase();
+
+    // An address without code returns "0x", which ethers reports as
+    // "could not decode result data" - give a clearer message instead.
+    let contractCode;
+    try {
+      contractCode = await provider.getCode(SMART_CONTRACT_ADDRESS);
+    } catch {
+      throw new Error("Cannot reach the blockchain node. Is `npx hardhat node` running?");
+    }
+    if (contractCode === "0x") {
+      throw new Error(
+        `No contract found at ${shortenAddress(SMART_CONTRACT_ADDRESS)} on chain ID ${EXPECTED_CHAIN_ID}. ` +
+        "Run `npm run deploy` (needed after every restart of the Hardhat node), then refresh with Ctrl+F5."
+      );
+    }
+
+    smartContract = new ethers.Contract(SMART_CONTRACT_ADDRESS, SMART_CONTRACT_ABI, signer);
+    activeRole = Number(await smartContract.getRole(connectedWallet));
+    activeWallet = connectedWallet;
+    if (activeRole === 0) {
+      activeWallet = undefined;
+      throw new Error(`Wallet ${shortenAddress(connectedWallet)} is not registered. Please contact the Admin.`);
+    }
+
     startApplication();
     showToast("Wallet Connected", `Signed in as ${ROLE_NAMES[activeRole]} (${shortenAddress(activeWallet)})`, "success");
   } catch (error) {
@@ -108,7 +178,13 @@ getElement("btnConnect").onclick = async () => {
 };
 
 getElement("btnLogout").onclick = () => location.reload();
-if (window.ethereum) window.ethereum.on("accountsChanged", () => location.reload());
+// Reload when the account or network changes, but only once signed in:
+// MetaMask also fires these events while the login above is still running.
+if (window.ethereum) {
+  const reloadIfSignedIn = () => { if (activeWallet) location.reload(); };
+  window.ethereum.on("accountsChanged", reloadIfSignedIn);
+  window.ethereum.on("chainChanged", reloadIfSignedIn);
+}
 
 function startApplication() {
   getElement("login").classList.add("hidden");
@@ -150,28 +226,82 @@ async function loadMyProfile() {
         <button class="btn-ghost" id="btnEditMyProfile">Edit</button>
       </div>`;
 
-    getElement("btnEditMyProfile").onclick = async () => {
-      const newFullName = prompt("Full name", profile.full_name);
-      if (!newFullName) return;
-      const newPhoneNumber = prompt("Phone number", profile.phone_number || "");
-      try {
-        await callApi("PUT", activeWallet, {
-          full_name: newFullName,
-          phone_number: newPhoneNumber ?? "",
-          specialization: profile.specialization ?? "",
-          age: profile.age ?? "",
-        });
-        loadMyProfile();
-        showToast("Profile Updated", "Your personal details have been updated.", "success");
-      } catch (error) {
-        showToast("Update Failed", error.message, "error");
-      }
-    };
+    getElement("btnEditMyProfile").onclick = () =>
+      openProfileDialog(profile, {
+        title: "Edit My Profile",
+        onSaved: () => {
+          loadMyProfile();
+          showToast("Profile Updated", "Your personal details have been updated.", "success");
+        },
+      });
   } catch {
     getElement("profileBox").innerHTML =
       `<p class="muted">Profile has not been created in the database.</p>`;
   }
 }
+
+// profile dialog
+// One in-page form for editing a profile (own profile, or any user for the Admin).
+let profileDialogState = null;
+
+function openProfileDialog(user, { title, showExtraField = false, onSaved }) {
+  const isDoctor = user.role === "Doctor";
+  profileDialogState = { user, showExtraField, onSaved };
+
+  getElement("profileDialogTitle").textContent = title;
+  getElement("profileDialogWallet").textContent = user.wallet_address;
+  getElement("profileFullName").value = user.full_name;
+  getElement("profilePhoneNumber").value = user.phone_number || "";
+
+  // Specialization (Doctor) / age (Patient) is only editable by the Admin
+  getElement("profileExtraGroup").classList.toggle("hidden", !showExtraField);
+  getElement("profileSpecialization").classList.toggle("hidden", !isDoctor);
+  getElement("profileAge").classList.toggle("hidden", isDoctor);
+  getElement("profileExtraLabel").textContent = isDoctor ? "Medical Specialization" : "Patient Age (Years)";
+  getElement("profileExtraLabel").htmlFor = isDoctor ? "profileSpecialization" : "profileAge";
+  getElement("profileSpecialization").value = user.specialization || "";
+  getElement("profileAge").value = user.age ?? "";
+
+  getElement("profileDialogError").textContent = "";
+  getElement("profileDialog").showModal();
+  getElement("profileFullName").focus();
+}
+
+const closeProfileDialog = () => getElement("profileDialog").close();
+getElement("btnCloseProfileDialog").onclick = closeProfileDialog;
+getElement("btnCancelProfile").onclick = closeProfileDialog;
+// A click on the dimmed backdrop lands on the <dialog> element itself
+getElement("profileDialog").onclick = (event) => {
+  if (event.target === event.currentTarget) closeProfileDialog();
+};
+
+getElement("formProfile").onsubmit = async (event) => {
+  event.preventDefault();
+  const { user, showExtraField, onSaved } = profileDialogState;
+  const updateData = {
+    full_name: getElement("profileFullName").value.trim(),
+    phone_number: getElement("profilePhoneNumber").value.trim(),
+  };
+  if (!updateData.full_name) {
+    getElement("profileDialogError").textContent = "Full name is required.";
+    return;
+  }
+  if (showExtraField) {
+    if (user.role === "Doctor") updateData.specialization = getElement("profileSpecialization").value.trim();
+    else updateData.age = getElement("profileAge").value;
+  }
+
+  const saveButton = getElement("btnSaveProfile");
+  saveButton.disabled = true;
+  try {
+    await callApi("PUT", user.wallet_address, updateData);
+    closeProfileDialog();
+    onSaved(updateData);
+  } catch (error) {
+    getElement("profileDialogError").textContent = error.message;
+  }
+  saveButton.disabled = false;
+};
 
 // admin
 getElement("inputRole").onchange = () => {
@@ -207,13 +337,15 @@ getElement("formUser").onsubmit = async (event) => {
   event.preventDefault();
   const submitButton = event.target.querySelector("button");
   submitButton.disabled = true;
-  showToast("Pending Confirmation", "Please confirm the transaction in MetaMask...", "info", 3000);
 
   try {
     const newWalletAddress = getElement("inputWalletAddress").value.trim().toLowerCase();
     const roleCode = getElement("inputRole").value;
     const isDoctor = roleCode === "2";
-    const fullName = getElement("inputFullName").value;
+    const fullName = getElement("inputFullName").value.trim();
+
+    await assertWalletNotRegistered(newWalletAddress);
+    showToast("Pending Confirmation", "Please confirm the transaction in MetaMask...", "info", 3000);
 
     const transaction = await smartContract.registerUser(newWalletAddress, Number(roleCode));
     await transaction.wait();
@@ -243,23 +375,14 @@ getElement("userTableBody").onclick = async (event) => {
   const user = userList.find((item) => item.wallet_address === button.dataset.wallet);
 
   if (button.dataset.action === "edit") {
-    const newFullName = prompt("Full name", user.full_name);
-    if (!newFullName) return;
-    const newPhoneNumber = prompt("Phone number", user.phone_number || "");
-    const updateData = { full_name: newFullName, phone_number: newPhoneNumber ?? "" };
-
-    if (user.role === "Doctor") {
-      updateData.specialization = prompt("Specialization", user.specialization || "") ?? "";
-    } else {
-      updateData.age = prompt("Age", user.age ?? "") ?? "";
-    }
-    try {
-      await callApi("PUT", user.wallet_address, updateData);
-      loadUserList();
-      showToast("Profile Updated", `${newFullName}'s data has been updated.`, "success");
-    } catch (error) {
-      showToast("Update Failed", error.message, "error");
-    }
+    openProfileDialog(user, {
+      title: `Edit ${user.role} Profile`,
+      showExtraField: true,
+      onSaved: (updateData) => {
+        loadUserList();
+        showToast("Profile Updated", `${updateData.full_name}'s data has been updated.`, "success");
+      },
+    });
   }
 
   if (button.dataset.action === "delete") {
@@ -323,11 +446,13 @@ getElement("formDoctorPatient").onsubmit = async (event) => {
   event.preventDefault();
   const submitButton = event.target.querySelector("button");
   submitButton.disabled = true;
-  showToast("Pending Confirmation", "Please confirm patient registration in MetaMask...", "info", 3000);
 
   try {
     const patientWallet = getElement("docPatientWallet").value.trim().toLowerCase();
-    const patientName = getElement("docPatientName").value;
+    const patientName = getElement("docPatientName").value.trim();
+
+    await assertWalletNotRegistered(patientWallet);
+    showToast("Pending Confirmation", "Please confirm patient registration in MetaMask...", "info", 3000);
 
     const transaction = await smartContract.registerUser(patientWallet, 3);
     await transaction.wait();

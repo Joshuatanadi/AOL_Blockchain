@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MediChain — Clinical EHR Portal</title>
+  <title>MediChain - Clinical EHR Platform</title>
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <!-- Raise ?v= whenever style.css / app.js change, so browsers drop their cached copy -->
+  <link rel="stylesheet" href="style.css?v=3" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
 </head>
 <body>
@@ -18,11 +20,7 @@
   <!-- login -->
   <div id="login" class="login-wrapper">
     <div class="login-card">
-      <div class="brand-mark">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 6v12M6 12h12"/>
-        </svg>
-      </div>
+      <img class="brand-mark" src="logo.svg" alt="MediChain logo" width="56" height="56" />
       <span class="portal-tag">DECENTRALIZED EHR SYSTEM</span>
       <h1>MediChain Clinical Portal</h1>
       <p class="subtitle">Secure, tamper-proof hospital medical records powered by Ethereum blockchain.</p>
@@ -35,9 +33,6 @@
         Connect MetaMask Wallet
       </button>
 
-      <div class="login-footer">
-        <span class="dot-live"></span> Role-based access verified on-chain
-      </div>
       <p id="loginError" class="error"></p>
     </div>
   </div>
@@ -47,11 +42,7 @@
     <header class="topbar">
       <div class="wrap topbar-inner">
         <div class="brand-group">
-          <div class="brand-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 6v12M6 12h12"/>
-            </svg>
-          </div>
+          <img class="brand-icon" src="logo.svg" alt="" width="34" height="34" />
           <div>
             <span class="brand-name">MediChain</span>
             <span class="brand-sub">Hospital EHR</span>
@@ -107,17 +98,17 @@
 
             <div class="field-group">
               <label for="inputFullName">Full Name</label>
-              <input id="inputFullName" placeholder="e.g. Dr. Sarah Jenkins" required />
+              <input id="inputFullName" maxlength="100" placeholder="e.g. Dr. Sarah Jenkins" required />
             </div>
 
             <div class="field-group">
               <label for="inputPhoneNumber">Contact Number</label>
-              <input id="inputPhoneNumber" placeholder="e.g. +62 812-3456-7890" />
+              <input id="inputPhoneNumber" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
             </div>
 
             <div class="field-group">
               <label for="inputSpecialization" id="labelExtra">Medical Specialization</label>
-              <input id="inputSpecialization" placeholder="e.g. Cardiology, General Practice" />
+              <input id="inputSpecialization" maxlength="100" placeholder="e.g. Cardiology, General Practice" />
               <input id="inputAge" type="number" min="0" max="150" placeholder="Patient Age (years)" class="hidden" />
             </div>
 
@@ -170,12 +161,12 @@
 
             <div class="field-group">
               <label for="docPatientName">Patient Full Name</label>
-              <input id="docPatientName" placeholder="e.g. Budi Santoso" required />
+              <input id="docPatientName" maxlength="100" placeholder="e.g. Budi Santoso" required />
             </div>
 
             <div class="field-group">
               <label for="docPatientPhone">Contact Number</label>
-              <input id="docPatientPhone" placeholder="e.g. +62 812-3456-7890" />
+              <input id="docPatientPhone" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
             </div>
 
             <div class="field-group span-2">
@@ -247,6 +238,44 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <!-- edit profile dialog -->
+  <dialog id="profileDialog" class="dialog">
+    <form id="formProfile" class="form-stack">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">PROFILE</span>
+          <h2 id="profileDialogTitle">Edit Profile</h2>
+        </div>
+        <button type="button" id="btnCloseProfileDialog" class="dialog-close" aria-label="Close">&times;</button>
+      </div>
+
+      <p id="profileDialogWallet" class="dialog-wallet mono muted"></p>
+
+      <div class="field-group">
+        <label for="profileFullName">Full Name</label>
+        <input id="profileFullName" maxlength="100" required />
+      </div>
+
+      <div class="field-group">
+        <label for="profilePhoneNumber">Contact Number</label>
+        <input id="profilePhoneNumber" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
+      </div>
+
+      <div class="field-group" id="profileExtraGroup">
+        <label for="profileSpecialization" id="profileExtraLabel">Medical Specialization</label>
+        <input id="profileSpecialization" maxlength="100" placeholder="e.g. Cardiology, General Practice" />
+        <input id="profileAge" type="number" min="0" max="150" placeholder="Patient Age (years)" class="hidden" />
+      </div>
+
+      <p id="profileDialogError" class="error"></p>
+
+      <div class="form-actions dialog-actions">
+        <button type="button" id="btnCancelProfile" class="btn-outline">Cancel</button>
+        <button id="btnSaveProfile" class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js?v=3"></script>
 </body>
 </html>

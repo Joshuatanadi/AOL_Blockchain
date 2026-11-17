@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 contract MedicalRecord {
@@ -21,10 +22,16 @@ contract MedicalRecord {
 
     constructor() { roles[msg.sender] = Role.Admin; }
 
-    // Admin
-    function registerUser(address userAddress, Role userRole) external onlyAdmin {
+    // Admin : may register Doctors and Patients
+    // Doctor: may only register Patients
+    // A wallet that already has a role cannot be registered again (no silent
+    // overwrite); the Admin has to remove it first to change its role.
+    function registerUser(address userAddress, Role userRole) external {
+        Role callerRole = roles[msg.sender];
+        require(callerRole == Role.Admin || callerRole == Role.Doctor, "Admin or Doctor only");
         require(userRole == Role.Doctor || userRole == Role.Patient, "Role must be Doctor or Patient");
-        require(roles[userAddress] != Role.Admin, "Address is an Admin");
+        require(callerRole == Role.Admin || userRole == Role.Patient, "Doctors can only register Patients");
+        require(roles[userAddress] == Role.None, "Address already registered");
         roles[userAddress] = userRole;
     }
 
@@ -60,6 +67,7 @@ contract MedicalRecord {
     function deleteRecord(uint256 id) external onlyDoctor { // soft delete
         Record storage record = _getRecord(id);
         require(record.doctor == msg.sender, "Not the creating doctor");
+        require(record.active, "Record already deleted");
         record.active = false;
     }
 
