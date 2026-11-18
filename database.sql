@@ -9,8 +9,3 @@ CREATE TABLE IF NOT EXISTS users (
   age            INT NULL,
   specialization VARCHAR(100) NULL
 );
-
--- Dedicated least-privilege DB user (replaces passwordless root)
-CREATE USER IF NOT EXISTS 'medichain_app'@'localhost' IDENTIFIED BY 'PasswordKuat#2026!';
-GRANT SELECT, INSERT, UPDATE, DELETE ON hospital_medical_records.* TO 'medichain_app'@'localhost';
-FLUSH PRIVILEGES;
