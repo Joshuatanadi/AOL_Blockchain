@@ -10,8 +10,8 @@ header("X-Content-Type-Options: nosniff");
 header("X-Frame-Options: DENY");
 header("Referrer-Policy: no-referrer");
 
-// Replace with your actual contract deployer wallet address
-define("ADMIN_WALLET", strtolower("0xALAMAT_WALLET_DEPLOYER_ANDA"));
+// Local Ethereum/Hardhat RPC URL for server-side on-chain role verification
+define("RPC_URL", getenv("RPC_URL") ?: "http://127.0.0.1:8545");
 
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 $db_host = getenv("DB_HOST") ?: "localhost";
@@ -24,6 +24,51 @@ function send_response($data, $status_code = 200)
     http_response_code($status_code);
     echo json_encode($data);
     exit;
+}
+
+/**
+ * Query smart contract getRole(address) directly via JSON-RPC
+ * Returns: 0 = None, 1 = Admin (contract deployer), 2 = Doctor, 3 = Patient
+ */
+function fetch_onchain_role(string $contract_address, string $wallet_address): int
+{
+    // Selector for keccak256("getRole(address)") = 0x44276733
+    $clean_wallet = substr($wallet_address, 2);
+    $call_data    = "0x44276733" . str_pad($clean_wallet, 64, "0", STR_PAD_LEFT);
+
+    $payload = json_encode([
+        "jsonrpc" => "2.0",
+        "method"  => "eth_call",
+        "params"  => [
+            [
+                "to"   => $contract_address,
+                "data" => $call_data
+            ],
+            "latest"
+        ],
+        "id" => 1
+    ]);
+
+    $context = stream_context_create([
+        "http" => [
+            "method"  => "POST",
+            "header"  => "Content-Type: application/json\r\n",
+            "content" => $payload,
+            "timeout" => 5
+        ]
+    ]);
+
+    $raw = @file_get_contents(RPC_URL, false, $context);
+    if ($raw === false) {
+        return -1; // RPC unreachable
+    }
+
+    $decoded = json_decode($raw, true);
+    if (!isset($decoded["result"]) || $decoded["result"] === "0x") {
+        return 0;
+    }
+
+    return (int) hexdec($decoded["result"]);
 }
 
 try {
@@ -40,20 +85,33 @@ $input_data     = json_decode(file_get_contents("php://input"), true) ?? [];
 $action         = $_GET["action"] ?? "";
 
 try {
-    // Session Login
+    // Session Login (Auto-detect contract deployer as Admin via on-chain verification)
     if ($request_method === "POST" && $action === "login") {
-        $login_wallet = strtolower(trim($input_data["wallet_address"] ?? ""));
-        $login_role   = (int) ($input_data["role"] ?? 0);
+        $login_wallet     = strtolower(trim($input_data["wallet_address"] ?? ""));
+        $contract_address = strtolower(trim($input_data["contract_address"] ?? ""));
+        $login_role       = (int) ($input_data["role"] ?? 0);
 
         if (!preg_match('/^0x[a-f0-9]{40}$/', $login_wallet)) {
             send_response(["error" => "Invalid wallet address"], 400);
         }
 
-        if ($login_wallet === ADMIN_WALLET && $login_role === 1) {
+        if ($login_role === 1) {
+            if (!preg_match('/^0x[a-f0-9]{40}$/', $contract_address)) {
+                send_response(["error" => "Invalid smart contract address"], 400);
+            }
+
+            $onchain_role = fetch_onchain_role($contract_address, $login_wallet);
+            if ($onchain_role === -1) {
+                send_response(["error" => "Blockchain RPC node unreachable (port 8545)"], 502);
+            }
+            if ($onchain_role !== 1) {
+                send_response(["error" => "Forbidden: Wallet is not the contract deployer/Admin"], 403);
+            }
+
             session_regenerate_id(true);
             $_SESSION["wallet"] = $login_wallet;
             $_SESSION["role"]   = "Admin";
-            send_response(["ok" => true]);
+            send_response(["ok" => true, "role" => "Admin"]);
         }
 
         $stmt = mysqli_prepare($connection, "SELECT role FROM users WHERE wallet_address = ?");
@@ -68,7 +126,7 @@ try {
         session_regenerate_id(true);
         $_SESSION["wallet"] = $login_wallet;
         $_SESSION["role"]   = $db_user["role"];
-        send_response(["ok" => true]);
+        send_response(["ok" => true, "role" => $db_user["role"]]);
     }
 
     // Session Logout
