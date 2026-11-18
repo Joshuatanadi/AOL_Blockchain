@@ -27,9 +27,43 @@ const escapeHtml = (text) =>
   }[character]));
 
 const shortenAddress = (address) => address.slice(0, 6) + "…" + address.slice(-4);
-const getErrorMessage = (error) => error.shortMessage || error.message || "An error occurred";
+
+function getErrorMessage(error) {
+  if (!error) return "An error occurred";
+  if (error.revert?.args?.[0]) return String(error.revert.args[0]);
+  if (error.reason) return String(error.reason);
+
+  const nestedMsg =
+    error.info?.error?.data?.message ||
+    error.info?.error?.message ||
+    error.data?.message ||
+    error.shortMessage ||
+    error.message ||
+    "An error occurred";
+
+  const revertMatch = String(nestedMsg).match(/reverted with reason string ['"]([^'"]+)['"]/i);
+  if (revertMatch) return revertMatch[1];
+
+  if (String(nestedMsg).includes("Internal JSON-RPC error")) {
+    return "Blockchain RPC error: ensure Hardhat node is running, contract is deployed to SMART_CONTRACT_ADDRESS, and MetaMask account nonce is reset (Settings > Advanced > Clear activity tab data).";
+  }
+
+  return String(nestedMsg);
+}
+
 const formatDate = (timestampInSeconds) =>
   new Date(Number(timestampInSeconds) * 1000).toLocaleString("en-US");
+
+async function ensureValidNetworkAndContract(provider) {
+  const network = await provider.getNetwork();
+  if (Number(network.chainId) !== EXPECTED_CHAIN_ID) {
+    throw new Error(`Wrong network (Chain ID ${network.chainId}). Please switch MetaMask to Localhost 8545 (Chain ID ${EXPECTED_CHAIN_ID}).`);
+  }
+  const deployedCode = await provider.getCode(SMART_CONTRACT_ADDRESS);
+  if (!deployedCode || deployedCode === "0x") {
+    throw new Error(`Smart contract not found at ${SMART_CONTRACT_ADDRESS}. Redeploy contract or update SMART_CONTRACT_ADDRESS in app.js.`);
+  }
+}
 
 // encryption helpers (AES-GCM client-side before storing on-chain)
 async function deriveSharedKey(patientAddr, doctorAddr) {
@@ -120,6 +154,7 @@ const getExtraInfo = (user) =>
     : user.age !== null && user.age !== undefined ? user.age + " years" : "-";
 
 // state
+let rpcProvider;
 let smartContract;
 let activeWallet;
 let activeRole;
@@ -127,21 +162,32 @@ let userList = [];
 let doctorRecordList = [];
 let editingRecordId = null;
 
-// login
+// login (auto-detects contract deployer as Admin)
 getElement("btnConnect").onclick = async () => {
   getElement("loginError").textContent = "";
   try {
     if (!window.ethereum) throw new Error("MetaMask not found. Please install it first.");
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    await provider.send("eth_requestAccounts", []);
-    const signer = await provider.getSigner();
+    rpcProvider = new ethers.BrowserProvider(window.ethereum);
+    await rpcProvider.send("eth_requestAccounts", []);
+    await ensureValidNetworkAndContract(rpcProvider);
+
+    const signer = await rpcProvider.getSigner();
     activeWallet = (await signer.getAddress()).toLowerCase();
     smartContract = new ethers.Contract(SMART_CONTRACT_ADDRESS, SMART_CONTRACT_ABI, signer);
 
     activeRole = Number(await smartContract.getRole(activeWallet));
     if (activeRole === 0) throw new Error("Wallet is not registered. Please contact the Admin.");
 
-    await callApi("POST", null, { wallet_address: activeWallet, role: activeRole }, "login");
+    await callApi(
+      "POST",
+      null,
+      {
+        wallet_address: activeWallet,
+        contract_address: SMART_CONTRACT_ADDRESS,
+        role: activeRole,
+      },
+      "login"
+    );
 
     startApplication();
     showToast("Wallet Connected", `Signed in as ${ROLE_NAMES[activeRole]} (${shortenAddress(activeWallet)})`, "success");
@@ -261,11 +307,13 @@ getElement("formUser").onsubmit = async (event) => {
   showToast("Pending Confirmation", "Please confirm the transaction in MetaMask...", "info", 3000);
 
   try {
+    await ensureValidNetworkAndContract(rpcProvider);
     const newWalletAddress = getElement("inputWalletAddress").value.trim().toLowerCase();
     const roleCode = getElement("inputRole").value;
     const isDoctor = roleCode === "2";
     const fullName = getElement("inputFullName").value;
 
+    await smartContract.registerUser.staticCall(newWalletAddress, Number(roleCode));
     const transaction = await smartContract.registerUser(newWalletAddress, Number(roleCode));
     await transaction.wait();
 
@@ -316,7 +364,9 @@ getElement("userTableBody").onclick = async (event) => {
   if (button.dataset.action === "delete") {
     if (!confirm(`Delete ${user.full_name}?`)) return;
     try {
+      await ensureValidNetworkAndContract(rpcProvider);
       showToast("Pending Confirmation", "Confirm user removal in MetaMask...", "info", 3000);
+      await smartContract.removeUser.staticCall(user.wallet_address);
       const transaction = await smartContract.removeUser(user.wallet_address);
       await transaction.wait();
       await callApi("DELETE", user.wallet_address);
@@ -392,9 +442,11 @@ getElement("formDoctorPatient").onsubmit = async (event) => {
   showToast("Pending Confirmation", "Please confirm patient registration in MetaMask...", "info", 3000);
 
   try {
+    await ensureValidNetworkAndContract(rpcProvider);
     const patientWallet = getElement("docPatientWallet").value.trim().toLowerCase();
     const patientName = getElement("docPatientName").value;
 
+    await smartContract.registerUser.staticCall(patientWallet, 3);
     const transaction = await smartContract.registerUser(patientWallet, 3);
     await transaction.wait();
 
@@ -432,18 +484,45 @@ getElement("formRecord").onsubmit = async (event) => {
   event.preventDefault();
   const saveButton = getElement("btnSaveRecord");
   saveButton.disabled = true;
-  showToast("Pending Confirmation", "Please confirm the medical record transaction in MetaMask...", "info", 3000);
 
   try {
-    const diagnosis = getElement("inputDiagnosis").value;
-    const treatment = getElement("inputTreatment").value;
-    const isEditing = Boolean(editingRecordId);
+    await ensureValidNetworkAndContract(rpcProvider);
 
-    const targetPatient = isEditing
-      ? doctorRecordList.find((r) => Number(r.id) === editingRecordId).patient
-      : getElement("selectPatient").value;
+    const diagnosis = getElement("inputDiagnosis").value.trim();
+    const treatment = getElement("inputTreatment").value.trim();
+    if (!diagnosis || !treatment) {
+      throw new Error("Diagnosis and treatment cannot be empty.");
+    }
+
+    const isEditing = Boolean(editingRecordId);
+    const targetPatient = (isEditing
+      ? doctorRecordList.find((r) => Number(r.id) === editingRecordId)?.patient
+      : getElement("selectPatient").value
+    )?.trim();
+
+    if (!targetPatient || !/^0x[a-fA-F0-9]{40}$/.test(targetPatient)) {
+      throw new Error("Please select a valid patient wallet address.");
+    }
+
+    const onChainDoctorRole = Number(await smartContract.getRole(activeWallet));
+    if (onChainDoctorRole !== 2) {
+      throw new Error("Your active wallet is not registered as a Doctor on-chain.");
+    }
+
+    const onChainPatientRole = Number(await smartContract.getRole(targetPatient));
+    if (onChainPatientRole !== 3) {
+      throw new Error("Selected patient is not registered on-chain yet. Register the patient first.");
+    }
 
     const encryptedPayload = await encryptRecordPayload(targetPatient, activeWallet, diagnosis, treatment);
+
+    if (isEditing) {
+      await smartContract.updateRecord.staticCall(editingRecordId, encryptedPayload);
+    } else {
+      await smartContract.createRecord.staticCall(targetPatient, encryptedPayload);
+    }
+
+    showToast("Pending Confirmation", "Please confirm the medical record transaction in MetaMask...", "info", 3000);
 
     const transaction = isEditing
       ? await smartContract.updateRecord(editingRecordId, encryptedPayload)
@@ -485,6 +564,8 @@ getElement("doctorRecords").onclick = async (event) => {
   if (button.dataset.action === "delete") {
     if (!confirm(`Delete medical record #${record.id}?`)) return;
     try {
+      await ensureValidNetworkAndContract(rpcProvider);
+      await smartContract.deleteRecord.staticCall(record.id);
       showToast("Pending Confirmation", "Confirm deletion in MetaMask...", "info", 3000);
       const transaction = await smartContract.deleteRecord(record.id);
       await transaction.wait();
