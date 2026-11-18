@@ -1,5 +1,6 @@
 // config
-// These two lines are rewritten by `npm run deploy` (scripts/deploy.ts)
+// These two lines are rewritten by `npm run deploy` (scripts/deploy.ts),
+// which also updates CONTRACT_ADDRESS in api.php.
 const SMART_CONTRACT_ADDRESS = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
 const EXPECTED_CHAIN_ID = 31337;
 
@@ -11,14 +12,16 @@ const LOCAL_HARDHAT_NETWORK = {
 };
 
 const MEDICAL_RECORD_STRUCT =
-  "tuple(uint256 id,address patient,address doctor,string diagnosis,string treatment,uint256 timestamp,bool active)";
+  "tuple(uint256 id,address patient,address doctor,string data,uint256 timestamp,bool active)";
 
 const SMART_CONTRACT_ABI = [
   "function getRole(address) view returns (uint8)",
   "function registerUser(address userAddress, uint8 userRole)",
   "function removeUser(address userAddress)",
-  "function createRecord(address patient,string diagnosis,string treatment) returns (uint256)",
-  "function updateRecord(uint256 id,string diagnosis,string treatment)",
+  "function createRecord(address patient,string data) returns (uint256)",
+  "function updateRecord(uint256 id,string data)",
+  "function publicKeys(address) view returns (bytes)",
+  "function setPublicKey(bytes key)",
   "function deleteRecord(uint256 id)",
   `function getMyRecords() view returns (${MEDICAL_RECORD_STRUCT}[])`,
 ];
@@ -38,42 +41,83 @@ const getErrorMessage = (error) => error.shortMessage || error.message || "An er
 const formatDate = (timestampInSeconds) =>
   new Date(Number(timestampInSeconds) * 1000).toLocaleString("en-US");
 
-// Client-Side Encryption (AES-GCM 256-bit) so medical records are never plaintext on-chain
-async function deriveRecordKey(patientAddr, doctorAddr) {
-  const material = new TextEncoder().encode(
-    `MediChain-EHR-v1:${patientAddr.toLowerCase()}:${doctorAddr.toLowerCase()}`
-  );
-  const hash = await crypto.subtle.digest("SHA-256", material);
-  return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+const KEY_MESSAGE = "MediChain encryption key v1. Only sign this on the MediChain site.";
+let myKey; 
+
+const toBytes = (hex) => ethers.getBytes(hex);
+const randomBytes = (size) => crypto.getRandomValues(new Uint8Array(size));
+
+async function aesEncrypt(keyBytes, plainBytes) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+  const iv = randomBytes(12);
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plainBytes);
+  return { iv: ethers.hexlify(iv), data: ethers.hexlify(new Uint8Array(data)) };
 }
 
-async function encryptField(patientAddr, doctorAddr, plainText) {
-  const key = await deriveRecordKey(patientAddr, doctorAddr);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(String(plainText));
-  const cipherBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-
-  const combined = new Uint8Array(iv.length + cipherBuffer.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(cipherBuffer), iv.length);
-  return "ENC:v1:" + btoa(String.fromCharCode(...combined));
+async function aesDecrypt(keyBytes, box) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: toBytes(box.iv) }, key, toBytes(box.data));
+  return new Uint8Array(plain);
 }
 
-async function decryptField(patientAddr, doctorAddr, storedText) {
-  const text = String(storedText ?? "");
-  if (!text.startsWith("ENC:v1:")) return text; // Backward-compatible with legacy plaintext records
-  try {
-    const key = await deriveRecordKey(patientAddr, doctorAddr);
-    const combined = Uint8Array.from(atob(text.slice(7)), (c) => c.charCodeAt(0));
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: combined.slice(0, 12) },
-      key,
-      combined.slice(12)
-    );
-    return new TextDecoder().decode(decrypted);
-  } catch {
-    return "[Encrypted Record - Unable to Decrypt]";
+// AES key that two EC keys share (ECDH)
+const sharedAesKey = (signingKey, otherPublicKey) =>
+  toBytes(ethers.sha256(signingKey.computeSharedSecret(otherPublicKey)));
+
+async function lockKey(aesKey, recipientPublicKey) {
+  const temp = new ethers.SigningKey(ethers.hexlify(randomBytes(32)));
+  const box = await aesEncrypt(sharedAesKey(temp, recipientPublicKey), aesKey);
+  return { from: temp.publicKey, ...box };
+}
+
+const unlockKey = (lock) => aesDecrypt(sharedAesKey(myKey, lock.from), lock);
+
+// Creates the user's keys and saves the public key on-chain (only the first time)
+async function setupEncryptionKey(signer) {
+  const signature = await signer.signMessage(KEY_MESSAGE);
+  myKey = new ethers.SigningKey(ethers.keccak256(signature));
+
+  const saved = await smartContract.publicKeys(activeWallet);
+  if (saved === "0x") {
+    showToast("Encryption Setup", "Confirm in MetaMask to save your public encryption key.", "info", 3000);
+    await (await smartContract.setPublicKey(myKey.publicKey)).wait();
+  } else if (saved.toLowerCase() !== myKey.publicKey.toLowerCase()) {
+    throw new Error("The encryption key of this wallet does not match the one saved on-chain.");
   }
+}
+
+async function encryptRecord(patientAddr, diagnosis, treatment) {
+  const patientKey = await smartContract.publicKeys(patientAddr);
+  if (patientKey === "0x") {
+    throw new Error("This patient has not activated encryption yet. Ask the patient to log in once.");
+  }
+  const aesKey = randomBytes(32);
+  const plain = new TextEncoder().encode(JSON.stringify({ diagnosis, treatment }));
+  return JSON.stringify({
+    v: 2,
+    body: await aesEncrypt(aesKey, plain),
+    patient: await lockKey(aesKey, patientKey),
+    doctor: await lockKey(aesKey, myKey.publicKey),
+  });
+}
+
+// Turns a record from the contract into plain objects the page can show
+async function readRecord(rec) {
+  let diagnosis = "[Encrypted Record - Unable to Decrypt]";
+  let treatment = diagnosis;
+  try {
+    const pack = JSON.parse(rec.data);
+    const lock = rec.patient.toLowerCase() === activeWallet ? pack.patient : pack.doctor;
+    const aesKey = await unlockKey(lock);
+    const text = new TextDecoder().decode(await aesDecrypt(aesKey, pack.body));
+    ({ diagnosis, treatment } = JSON.parse(text));
+  } catch {
+    // keep the "unable to decrypt" text
+  }
+  return {
+    id: rec.id, patient: rec.patient, doctor: rec.doctor,
+    diagnosis, treatment, timestamp: rec.timestamp, active: rec.active,
+  };
 }
 
 // toast
@@ -128,15 +172,38 @@ const getExtraInfo = (user) =>
     ? user.specialization || "-"
     : user.age !== null && user.age !== undefined ? user.age + " years" : "-";
 
-// Stops a registration before any transaction is sent when the wallet already
-// has a role, so an existing profile is never overwritten by a second sign-up.
-async function assertWalletNotRegistered(walletAddress) {
+// Decides what a registration still has to do, before any transaction is sent.
+//  - true : the wallet has no role yet, so registerUser must be sent
+//  - false: the wallet is already on-chain with the right role but has no profile
+async function checkRegistration(walletAddress, expectedRole) {
   if (!ethers.isAddress(walletAddress)) throw new Error("That is not a valid wallet address.");
   const existingRole = Number(await smartContract.getRole(walletAddress));
-  if (existingRole !== 0) {
+  if (existingRole === 0) return true;
+
+  const alreadyRegistered = new Error(
+    `This wallet is already registered as ${ROLE_NAMES[existingRole]}. ` +
+    "Existing users can only be changed with Edit, or removed by the Admin first."
+  );
+  if (existingRole !== expectedRole) throw alreadyRegistered;
+
+  try {
+    await callApi("GET", walletAddress);
+  } catch (error) {
+    if (error.message === "Profile not found") return false;
+    throw error;
+  }
+  throw alreadyRegistered;
+}
+
+// Saves the profile after the on-chain registration. If this fails the wallet already
+// has its role on-chain, so the message explains that submitting again only retries the save.
+async function saveProfileAfterRegistration(profile) {
+  try {
+    await callApi("POST", null, profile);
+  } catch (error) {
     throw new Error(
-      `This wallet is already registered as ${ROLE_NAMES[existingRole]}. ` +
-      "Existing users can only be changed with Edit, or removed by the Admin first."
+      `The wallet was registered on-chain, but saving the profile failed (${error.message}). ` +
+      "Submit the same form again to retry saving the profile."
     );
   }
 }
@@ -207,22 +274,18 @@ getElement("btnConnect").onclick = async () => {
       throw new Error(`Wallet ${shortenAddress(connectedWallet)} is not registered. Please contact the Admin.`);
     }
 
-    // Establish authenticated HttpOnly PHP session
-    await callApi(
-      "POST",
-      null,
-      {
-        wallet_address: activeWallet,
-        contract_address: SMART_CONTRACT_ADDRESS,
-        role: activeRole,
-      },
-      "login"
-    );
+    // Prove wallet ownership: sign a one-time server challenge (free, no transaction)
+    const { message } = await callApi("POST", null, { wallet_address: activeWallet }, "nonce");
+    const signature = await signer.signMessage(message);
+    await callApi("POST", null, { wallet_address: activeWallet, signature }, "login");
+
+    if (activeRole === 2 || activeRole === 3) await setupEncryptionKey(signer);
 
     startApplication();
     showToast("Wallet Connected", `Signed in as ${ROLE_NAMES[activeRole]} (${shortenAddress(activeWallet)})`, "success");
   } catch (error) {
     activeWallet = undefined;
+    await callApi("POST", null, {}, "logout").catch(() => {}); // drop a half-finished server session
     const errMsg = getErrorMessage(error);
     getElement("loginError").textContent = errMsg;
     showToast("Authentication Failed", errMsg, "error");
@@ -400,13 +463,14 @@ getElement("formUser").onsubmit = async (event) => {
     const isDoctor = roleCode === "2";
     const fullName = getElement("inputFullName").value.trim();
 
-    await assertWalletNotRegistered(newWalletAddress);
-    showToast("Pending Confirmation", "Please confirm the transaction in MetaMask...", "info", 3000);
+    const needsTransaction = await checkRegistration(newWalletAddress, Number(roleCode));
+    if (needsTransaction) {
+      showToast("Pending Confirmation", "Please confirm the transaction in MetaMask...", "info", 3000);
+      const transaction = await smartContract.registerUser(newWalletAddress, Number(roleCode));
+      await transaction.wait();
+    }
 
-    const transaction = await smartContract.registerUser(newWalletAddress, Number(roleCode));
-    await transaction.wait();
-
-    await callApi("POST", null, {
+    await saveProfileAfterRegistration({
       wallet_address: newWalletAddress,
       full_name: fullName,
       role: isDoctor ? "Doctor" : "Patient",
@@ -444,9 +508,14 @@ getElement("userTableBody").onclick = async (event) => {
   if (button.dataset.action === "delete") {
     if (!confirm(`Delete ${user.full_name}?`)) return;
     try {
-      showToast("Pending Confirmation", "Confirm user removal in MetaMask...", "info", 3000);
-      const transaction = await smartContract.removeUser(user.wallet_address);
-      await transaction.wait();
+      // Skip the transaction when the wallet is already removed on-chain (e.g. the node was
+      // restarted, or the database delete failed last time); only the database row is left.
+      const onChainRole = Number(await smartContract.getRole(user.wallet_address));
+      if (onChainRole !== 0) {
+        showToast("Pending Confirmation", "Confirm user removal in MetaMask...", "info", 3000);
+        const transaction = await smartContract.removeUser(user.wallet_address);
+        await transaction.wait();
+      }
       await callApi("DELETE", user.wallet_address);
       loadUserList();
       showToast("User Removed", `${user.full_name} has been removed from the system.`, "success");
@@ -475,17 +544,7 @@ async function loadDoctorPage() {
     const contractResult = await smartContract.getMyRecords();
     const rawRecords = [...contractResult].reverse();
 
-    doctorRecordList = await Promise.all(
-      rawRecords.map(async (rec) => ({
-        id: rec.id,
-        patient: rec.patient,
-        doctor: rec.doctor,
-        diagnosis: await decryptField(rec.patient, rec.doctor, rec.diagnosis),
-        treatment: await decryptField(rec.patient, rec.doctor, rec.treatment),
-        timestamp: rec.timestamp,
-        active: rec.active,
-      }))
-    );
+    doctorRecordList = await Promise.all(rawRecords.map(readRecord));
 
     getElement("doctorRecords").innerHTML = doctorRecordList.length
       ? doctorRecordList.map((record) => `
@@ -519,13 +578,14 @@ getElement("formDoctorPatient").onsubmit = async (event) => {
     const patientWallet = getElement("docPatientWallet").value.trim().toLowerCase();
     const patientName = getElement("docPatientName").value.trim();
 
-    await assertWalletNotRegistered(patientWallet);
-    showToast("Pending Confirmation", "Please confirm patient registration in MetaMask...", "info", 3000);
+    const needsTransaction = await checkRegistration(patientWallet, 3);
+    if (needsTransaction) {
+      showToast("Pending Confirmation", "Please confirm patient registration in MetaMask...", "info", 3000);
+      const transaction = await smartContract.registerUser(patientWallet, 3);
+      await transaction.wait();
+    }
 
-    const transaction = await smartContract.registerUser(patientWallet, 3);
-    await transaction.wait();
-
-    await callApi("POST", null, {
+    await saveProfileAfterRegistration({
       wallet_address: patientWallet,
       full_name: patientName,
       role: "Patient",
@@ -569,14 +629,13 @@ getElement("formRecord").onsubmit = async (event) => {
       ? doctorRecordList.find((r) => Number(r.id) === editingRecordId)?.patient
       : getElement("selectPatient").value;
 
-    const encryptedDiagnosis = await encryptField(targetPatient, activeWallet, diagnosis);
-    const encryptedTreatment = await encryptField(targetPatient, activeWallet, treatment);
+    const encryptedData = await encryptRecord(targetPatient, diagnosis, treatment);
 
     showToast("Pending Confirmation", "Please confirm the medical record transaction in MetaMask...", "info", 3000);
 
     const transaction = isEditing
-      ? await smartContract.updateRecord(editingRecordId, encryptedDiagnosis, encryptedTreatment)
-      : await smartContract.createRecord(targetPatient, encryptedDiagnosis, encryptedTreatment);
+      ? await smartContract.updateRecord(editingRecordId, encryptedData)
+      : await smartContract.createRecord(targetPatient, encryptedData);
     await transaction.wait();
 
     resetRecordForm();
@@ -632,16 +691,7 @@ async function loadPatientPage() {
     const contractResult = await smartContract.getMyRecords();
     const rawRecords = [...contractResult].reverse();
 
-    const patientRecordList = await Promise.all(
-      rawRecords.map(async (rec) => ({
-        id: rec.id,
-        patient: rec.patient,
-        doctor: rec.doctor,
-        diagnosis: await decryptField(rec.patient, rec.doctor, rec.diagnosis),
-        treatment: await decryptField(rec.patient, rec.doctor, rec.treatment),
-        timestamp: rec.timestamp,
-      }))
-    );
+    const patientRecordList = await Promise.all(rawRecords.map(readRecord));
 
     getElement("patientRecords").innerHTML = patientRecordList.length
       ? patientRecordList.map((record) => {

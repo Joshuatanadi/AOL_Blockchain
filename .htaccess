@@ -16,4 +16,4 @@ Options -Indexes -ExecCGI
 
 # Block hidden files/directories (.git, .gitignore, .env) and non-public folders
 RedirectMatch 404 /\.(?!well-known)
-RedirectMatch 404 ^/(node_modules|contract|scripts|artifacts|cache)/
+RedirectMatch 404 ^/(node_modules|contract|scripts|artifacts|cache|vendor)/
