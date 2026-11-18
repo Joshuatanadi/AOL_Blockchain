@@ -1,0 +1,15 @@
+{
+  "name": "AOL_Blockchain",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "node": "hardhat node",
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.ts --network localhost"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "hardhat": "^3.22.0",
+    "typescript": "~6.0.3"
+  }
+}

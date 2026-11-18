@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; object-src 'none'; base-uri 'self';" />
+  <title>MediChain - Clinical EHR Platform</title>
+  <link rel="icon" type="image/png" href="favicon.png?v=2" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Raise ?v= whenever style.css / app.js change, so browsers drop their cached copy -->
+  <link rel="stylesheet" href="style.css?v=10" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+
+  <!-- toast -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- login -->
+  <div id="login" class="login-wrapper">
+
+    <header class="hero">
+      <nav class="landing-nav">
+        <div class="wrap landing-nav-inner">
+          <div class="brand-group">
+            <img class="brand-lockup" src="logo-lockup.png" alt="MediChain Hospital EHR" width="205" height="48" />
+          </div>
+          <div class="nav-links">
+            <a href="#about">About</a>
+            <a href="#how">How it works</a>
+            <a href="#roles">Roles</a>
+          </div>
+          <a href="#connect" class="nav-cta">Connect wallet</a>
+        </div>
+      </nav>
+
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <span class="hero-kicker">Decentralised hospital records</span>
+          <h1>Medical records no one can quietly <em>rewrite</em>.</h1>
+          <p class="subtitle">
+            Every diagnosis is signed by the doctor who wrote it and committed to
+            the Ethereum blockchain. A record can be voided, but never erased or altered.
+          </p>
+
+          <div id="connect" class="hero-action">
+            <button id="btnConnect" class="btn btn-primary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="5" width="20" height="14" rx="2"/>
+                <line x1="2" y1="10" x2="22" y2="10"/>
+              </svg>
+              Connect MetaMask Wallet
+            </button>
+            <p class="hero-note">Your wallet is your account. No password to create.</p>
+            <p id="loginError" class="error"></p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="about" class="landing-section about">
+      <div class="wrap">
+        <div class="about-grid">
+          <div class="about-lead">
+            <span class="section-kicker">About MediChain</span>
+            <h2>A hospital record that outlives the hospital that wrote it.</h2>
+          </div>
+          <div class="about-text">
+            <p>
+              In an ordinary hospital system, medical records sit in a database the
+              hospital itself controls. Anyone with the right access can change a
+              diagnosis, backdate an entry, or remove one, and leave no trace behind.
+            </p>
+            <p>
+              MediChain moves those records onto the Ethereum blockchain. Each entry
+              is signed by the wallet of the doctor who wrote it, timestamped by the
+              network, and kept where no single party can revise it. Correcting a
+              record adds a new version; voiding one marks it closed. Neither deletes
+              what came before.
+            </p>
+          </div>
+        </div>
+
+        <div class="stat-row">
+          <div class="stat">
+            <b>3</b>
+            <span>roles enforced inside the smart contract, not the interface</span>
+          </div>
+          <div class="stat">
+            <b>100%</b>
+            <span>of diagnoses and treatments written directly to the chain</span>
+          </div>
+          <div class="stat">
+            <b>0</b>
+            <span>records that can be erased once a doctor has signed them</span>
+          </div>
+        </div>
+
+        <div class="value-row">
+          <article class="value-card">
+            <h3>Signed, not just saved</h3>
+            <p>Each record carries the wallet signature of the doctor who wrote it, so authorship can be proven rather than trusted.</p>
+          </article>
+          <article class="value-card">
+            <h3>Access decided by contract</h3>
+            <p>Admins register staff, doctors write records, patients read their own. Those rules live in the smart contract, where the interface cannot bypass them.</p>
+          </article>
+          <article class="value-card">
+            <h3>Nothing disappears</h3>
+            <p>Deleting a record marks it void. The original entry stays on-chain, where an auditor can still find it years later.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" class="landing-section how">
+      <div class="wrap">
+        <div class="section-head center">
+          <span class="section-kicker">The flow</span>
+          <h2>How a record is made</h2>
+          <p>Three wallets, three jobs. No one holds more access than their role allows.</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <span class="step-no">1</span>
+            <h3>The hospital admits a wallet</h3>
+            <p>An admin registers a doctor or a patient by their wallet address, and stores the name and contact details off-chain.</p>
+          </li>
+          <li>
+            <span class="step-no">2</span>
+            <h3>A doctor writes the entry</h3>
+            <p>Diagnosis and treatment are signed in MetaMask and committed to the chain, stamped with the time and the author.</p>
+          </li>
+          <li>
+            <span class="step-no">3</span>
+            <h3>The patient reads it back</h3>
+            <p>Patients open their own chart with the same wallet they were registered with. Read-only, always.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="roles" class="landing-section roles">
+      <div class="wrap">
+        <div class="section-head center">
+          <span class="section-kicker">Permissions</span>
+          <h2>Three roles, one portal</h2>
+          <p>What you see after connecting depends entirely on which wallet you hold.</p>
+        </div>
+        <div class="role-row">
+          <article class="role-card">
+            <span class="role-tag tag-sky">Admin</span>
+            <h3>Administrator</h3>
+            <p>Registers doctors and patients, keeps the hospital directory, and removes access when someone leaves.</p>
+          </article>
+          <article class="role-card featured">
+            <span class="role-tag tag-mint">Clinical</span>
+            <h3>Doctor</h3>
+            <p>Admits patients, writes and revises medical records, and voids entries they authored, but never another doctor's.</p>
+          </article>
+          <article class="role-card">
+            <span class="role-tag tag-sun">Read-only</span>
+            <h3>Patient</h3>
+            <p>Reads their own medical history and keeps their contact details current. Cannot write to the chain.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <footer class="landing-footer">
+      <div class="wrap landing-footer-inner">
+        <span>MediChain · Decentralised hospital records</span>
+        <span>Runs on Ethereum · Records stored on-chain</span>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- app -->
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="wrap topbar-inner">
+        <div class="brand-group">
+          <img class="brand-lockup" src="logo-lockup.png" alt="MediChain Hospital EHR" width="180" height="42" />
+        </div>
+
+        <div class="topbar-right">
+          <span id="roleBadge" class="role-pill"></span>
+          <div class="wallet-chip">
+            <span class="dot-live"></span>
+            <span id="shortWallet" class="mono"></span>
+          </div>
+          <button id="btnLogout" class="btn-outline">Sign Out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap main-content">
+      <!-- profile -->
+      <section class="card profile-card">
+        <div class="section-header">
+          <div>
+            <span class="eyebrow">IDENTIFICATION</span>
+            <h2>Practitioner &amp; Patient Profile</h2>
+          </div>
+        </div>
+        <div id="profileBox"></div>
+      </section>
+
+      <!-- admin -->
+      <div id="viewAdmin" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">ACCESS CONTROL</span>
+              <h2>Register Medical Staff / Patient</h2>
+            </div>
+          </div>
+
+          <form id="formUser" class="form-grid">
+            <div class="field-group span-2">
+              <label for="inputWalletAddress">Ethereum Wallet Address</label>
+              <input id="inputWalletAddress" placeholder="0x0000...0000" required />
+            </div>
+
+            <div class="field-group">
+              <label for="inputRole">System Role</label>
+              <select id="inputRole">
+                <option value="2">Doctor (Clinical Practitioner)</option>
+                <option value="3">Patient (Read-Only Access)</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label for="inputFullName">Full Name</label>
+              <input id="inputFullName" maxlength="100" placeholder="e.g. Dr. Sarah Jenkins" required />
+            </div>
+
+            <div class="field-group">
+              <label for="inputPhoneNumber">Contact Number</label>
+              <input id="inputPhoneNumber" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
+            </div>
+
+            <div class="field-group">
+              <label for="inputSpecialization" id="labelExtra">Medical Specialization</label>
+              <input id="inputSpecialization" maxlength="100" placeholder="e.g. Cardiology, General Practice" />
+              <input id="inputAge" type="number" min="0" max="150" placeholder="Patient Age (years)" class="hidden" />
+            </div>
+
+            <div class="form-actions span-2">
+              <button class="btn btn-primary">Register Wallet &amp; Profile</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">DIRECTORY</span>
+              <h2>Registered Hospital Directory</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Full Name</th>
+                  <th>Role</th>
+                  <th>Wallet Address</th>
+                  <th>Contact</th>
+                  <th>Department / Age</th>
+                  <th class="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="userTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- doctor -->
+      <div id="viewDoctor" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">PATIENT ADMISSION</span>
+              <h2>Register New Patient</h2>
+            </div>
+          </div>
+
+          <form id="formDoctorPatient" class="form-grid">
+            <div class="field-group span-2">
+              <label for="docPatientWallet">Patient Ethereum Wallet Address</label>
+              <input id="docPatientWallet" placeholder="0x0000...0000" required />
+            </div>
+
+            <div class="field-group">
+              <label for="docPatientName">Patient Full Name</label>
+              <input id="docPatientName" maxlength="100" placeholder="e.g. Budi Santoso" required />
+            </div>
+
+            <div class="field-group">
+              <label for="docPatientPhone">Contact Number</label>
+              <input id="docPatientPhone" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
+            </div>
+
+            <div class="field-group span-2">
+              <label for="docPatientAge">Patient Age (Years)</label>
+              <input id="docPatientAge" type="number" min="0" max="150" placeholder="e.g. 28" />
+            </div>
+
+            <div class="form-actions span-2">
+              <button class="btn btn-primary">Register Patient</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">CLINICAL ENTRY</span>
+              <h2 id="recordFormTitle">Create New Medical Record</h2>
+            </div>
+          </div>
+
+          <form id="formRecord" class="form-stack">
+            <div class="field-group">
+              <label for="selectPatient">Select Registered Patient</label>
+              <select id="selectPatient" required></select>
+            </div>
+
+            <div class="field-group">
+              <label for="inputDiagnosis">Clinical Diagnosis &amp; Findings</label>
+              <textarea id="inputDiagnosis" rows="3" placeholder="Enter primary diagnosis, symptoms, and vital observations..." required></textarea>
+            </div>
+
+            <div class="field-group">
+              <label for="inputTreatment">Treatment Plan &amp; Prescription</label>
+              <textarea id="inputTreatment" rows="3" placeholder="Enter prescribed medications, dosage instructions, and follow-up care..." required></textarea>
+            </div>
+
+            <div class="form-actions">
+              <button id="btnSaveRecord" class="btn btn-primary">Save to Blockchain</button>
+              <button id="btnCancelEdit" type="button" class="btn-outline hidden">Cancel Edit</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">EHR ARCHIVE</span>
+              <h2>Issued Medical Records</h2>
+            </div>
+          </div>
+          <div id="doctorRecords" class="records-list"></div>
+        </section>
+      </div>
+
+      <!-- patient -->
+      <div id="viewPatient" class="hidden">
+        <section class="card">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">PERSONAL HEALTH RECORD</span>
+              <h2>My Medical History</h2>
+            </div>
+          </div>
+          <p id="patientMessage" class="error"></p>
+          <div id="patientRecords" class="records-list"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- edit profile dialog -->
+  <dialog id="profileDialog" class="dialog">
+    <form id="formProfile" class="form-stack">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">PROFILE</span>
+          <h2 id="profileDialogTitle">Edit Profile</h2>
+        </div>
+        <button type="button" id="btnCloseProfileDialog" class="dialog-close" aria-label="Close">&times;</button>
+      </div>
+
+      <p id="profileDialogWallet" class="dialog-wallet mono muted"></p>
+
+      <div class="field-group">
+        <label for="profileFullName">Full Name</label>
+        <input id="profileFullName" maxlength="100" required />
+      </div>
+
+      <div class="field-group">
+        <label for="profilePhoneNumber">Contact Number</label>
+        <input id="profilePhoneNumber" maxlength="20" placeholder="e.g. +62 812-3456-7890" />
+      </div>
+
+      <div class="field-group" id="profileExtraGroup">
+        <label for="profileSpecialization" id="profileExtraLabel">Medical Specialization</label>
+        <input id="profileSpecialization" maxlength="100" placeholder="e.g. Cardiology, General Practice" />
+        <input id="profileAge" type="number" min="0" max="150" placeholder="Patient Age (years)" class="hidden" />
+      </div>
+
+      <p id="profileDialogError" class="error"></p>
+
+      <div class="form-actions dialog-actions">
+        <button type="button" id="btnCancelProfile" class="btn-outline">Cancel</button>
+        <button id="btnSaveProfile" class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js?v=10"></script>
+
+  <!-- The nav button scrolls to the hero and fires the real connect button,
+       so the wallet flow stays defined in one place (app.js). -->
+  <script>
+    document.querySelector(".nav-cta")?.addEventListener("click", () => {
+      document.getElementById("btnConnect")?.click();
+    });
+
+    // Connecting from the nav leaves the page scrolled down the landing page.
+    // When the signed-in view appears, start it at the top.
+    const appView = document.getElementById("app");
+    if (appView) {
+      new MutationObserver(() => {
+        if (appView.classList.contains("hidden")) return;
+        const root = document.documentElement;
+        const previous = root.style.scrollBehavior;
+        root.style.scrollBehavior = "auto";
+        window.scrollTo(0, 0);
+        root.style.scrollBehavior = previous;
+      }).observe(appView, { attributes: true, attributeFilter: ["class"] });
+    }
+  </script>
+</body>
+</html>
